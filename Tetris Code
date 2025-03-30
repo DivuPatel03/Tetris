@@ -1,0 +1,521 @@
+#include <bits/stdc++.h>
+#include <conio.h>
+#include <Windows.h>
+
+using namespace std;
+
+// Console colors
+enum ConsoleColor {
+    BLACK = 0, BLUE = 1, GREEN = 2, CYAN = 3, RED = 4, MAGENTA = 5, BROWN = 6, LIGHTGRAY = 7,
+    DARKGRAY = 8, LIGHTBLUE = 9, LIGHTGREEN = 10, LIGHTCYAN = 11, LIGHTRED = 12, LIGHTMAGENTA = 13, YELLOW = 14, WHITE = 15
+};
+
+// Constants
+const int BOARD_WIDTH = 10;
+const int BOARD_HEIGHT = 20;
+const int TETROMINO_SIZE = 4;
+const int INITIAL_FALLING_SPEED = 500; // ms
+const int SPEED_INCREASE_AFTER_LINES = 10;
+const int SPEED_INCREASE_AMOUNT = 50; // ms
+const int PREVIEW_POS_X = BOARD_WIDTH + 4;
+const int PREVIEW_POS_Y = 2;
+const int INFO_POS_X = BOARD_WIDTH + 4;
+const int INFO_POS_Y = 10;
+
+// Game board and display buffer
+vector<vector<int>> board(BOARD_HEIGHT, vector<int>(BOARD_WIDTH, 0));
+CHAR_INFO consoleBuffer[BOARD_HEIGHT + 2][BOARD_WIDTH * 2 + 30];
+
+// Tetromino shapes (I, O, T, S, Z, J, L)
+const vector<vector<vector<int>>> TETROMINOS = {
+    {{0,0,0,0}, {1,1,1,1}, {0,0,0,0}, {0,0,0,0}}, // I
+    {{0,0,0,0}, {0,2,2,0}, {0,2,2,0}, {0,0,0,0}}, // O
+    {{0,0,0,0}, {0,3,0,0}, {3,3,3,0}, {0,0,0,0}}, // T
+    {{0,0,0,0}, {0,4,4,0}, {4,4,0,0}, {0,0,0,0}}, // S
+    {{0,0,0,0}, {5,5,0,0}, {0,5,5,0}, {0,0,0,0}}, // Z
+    {{0,0,0,0}, {6,0,0,0}, {6,6,6,0}, {0,0,0,0}}, // J
+    {{0,0,0,0}, {0,0,7,0}, {7,7,7,0}, {0,0,0,0}}  // L
+};
+
+// Colors for each tetromino type
+const ConsoleColor TETROMINO_COLORS[] = {
+    BLACK, LIGHTCYAN, YELLOW, LIGHTMAGENTA, LIGHTGREEN, LIGHTRED, LIGHTBLUE, BROWN
+};
+
+// Console utility functions
+void setCursorPosition(int x, int y) {
+    SetConsoleCursorPosition(GetStdHandle(STD_OUTPUT_HANDLE), {static_cast<SHORT>(x), static_cast<SHORT>(y)});
+}
+
+void setConsoleColor(ConsoleColor foreground, ConsoleColor background = BLACK) {
+    SetConsoleTextAttribute(GetStdHandle(STD_OUTPUT_HANDLE), (background << 4) | foreground);
+}
+
+void hideCursor() {
+    CONSOLE_CURSOR_INFO cursorInfo = {100, FALSE};
+    SetConsoleCursorInfo(GetStdHandle(STD_OUTPUT_HANDLE), &cursorInfo);
+}
+
+// Buffer manipulation functions
+void writeToBuffer(int x, int y, char ch, WORD attributes) {
+    if (y >= 0 && y < BOARD_HEIGHT + 2 && x >= 0 && x < BOARD_WIDTH * 2 + 30) {
+        consoleBuffer[y][x].Char.AsciiChar = ch;
+        consoleBuffer[y][x].Attributes = attributes;
+    }
+}
+
+void writeStringToBuffer(int x, int y, const string& text, WORD attributes) {
+    for (size_t i = 0; i < text.length(); i++) {
+        writeToBuffer(x + i, y, text[i], attributes);
+    }
+}
+
+void renderBuffer() {
+    COORD bufferSize = {BOARD_WIDTH * 2 + 30, BOARD_HEIGHT + 2};
+    SMALL_RECT writeRegion = {0, 0, BOARD_WIDTH * 2 + 29, BOARD_HEIGHT + 1};
+    WriteConsoleOutput(GetStdHandle(STD_OUTPUT_HANDLE), (CHAR_INFO*)consoleBuffer, bufferSize, {0, 0}, &writeRegion);
+}
+
+void clearBuffer() {
+    for (int y = 0; y < BOARD_HEIGHT + 2; y++)
+        for (int x = 0; x < BOARD_WIDTH * 2 + 30; x++) {
+            consoleBuffer[y][x].Char.AsciiChar = ' ';
+            consoleBuffer[y][x].Attributes = WHITE;
+        }
+}
+
+// Game class
+class TetrisGame {
+private:
+    vector<vector<int>> currentTetromino, nextTetromino;
+    int currentX, currentY, currentTetrominoType, nextTetrominoType;
+    int score, highScore, level, linesCleared, fallingSpeed;
+    bool gameOver, exitGame;
+    mt19937 gen;
+
+public:
+    TetrisGame() : gen(random_device()()) {
+        highScore = 0;
+        exitGame = false;
+        resetGame();
+    }
+
+    void resetGame() {
+        // Clear the board
+        for (auto& row : board)
+            fill(row.begin(), row.end(), 0);
+        
+        score = 0;
+        level = 1;
+        linesCleared = 0;
+        fallingSpeed = INITIAL_FALLING_SPEED;
+        gameOver = false;
+        
+        generateNextTetromino();
+        spawnTetromino();
+    }
+
+    void generateNextTetromino() {
+        nextTetrominoType = uniform_int_distribution<>(0, TETROMINOS.size() - 1)(gen);
+        nextTetromino = TETROMINOS[nextTetrominoType];
+    }
+
+    void spawnTetromino() {
+        currentTetrominoType = nextTetrominoType;
+        currentTetromino = nextTetromino;
+        generateNextTetromino();
+        
+        currentX = BOARD_WIDTH / 2 - 2;
+        currentY = 0;
+        
+        if (!isValidPosition()) {
+            gameOver = true;
+            highScore = max(highScore, score);
+        }
+    }
+
+    bool isValidPosition() {
+        for (int y = 0; y < TETROMINO_SIZE; y++) {
+            for (int x = 0; x < TETROMINO_SIZE; x++) {
+                if (currentTetromino[y][x] != 0) {
+                    int boardX = currentX + x;
+                    int boardY = currentY + y;
+                    
+                    if (boardX < 0 || boardX >= BOARD_WIDTH || 
+                        boardY < 0 || boardY >= BOARD_HEIGHT || 
+                        (boardY >= 0 && board[boardY][boardX] != 0)) {
+                        return false;
+                    }
+                }
+            }
+        }
+        return true;
+    }
+
+    void rotateTetromino() {
+        vector<vector<int>> originalTetromino = currentTetromino;
+        vector<vector<int>> rotatedTetromino(TETROMINO_SIZE, vector<int>(TETROMINO_SIZE, 0));
+        
+        // Rotate 90° clockwise
+        for (int y = 0; y < TETROMINO_SIZE; y++)
+            for (int x = 0; x < TETROMINO_SIZE; x++)
+                rotatedTetromino[x][TETROMINO_SIZE - 1 - y] = currentTetromino[y][x];
+        
+        currentTetromino = rotatedTetromino;
+        
+        // Wall kicks
+        if (!isValidPosition()) {
+            currentX++; // Try right
+            if (!isValidPosition()) {
+                currentX -= 2; // Try left
+                if (!isValidPosition()) {
+                    currentX++; // Center X
+                    currentY--; // Try up
+                    if (!isValidPosition()) {
+                        currentY++; // Revert
+                        currentTetromino = originalTetromino; // Revert rotation
+                    }
+                }
+            }
+        }
+    }
+
+    void moveLeft() {
+        currentX--;
+        if (!isValidPosition())
+            currentX++;
+    }
+
+    void moveRight() {
+        currentX++;
+        if (!isValidPosition())
+            currentX--;
+    }
+
+    bool moveDown() {
+        currentY++;
+        if (!isValidPosition()) {
+            currentY--;
+            mergeTetromino();
+            return false;
+        }
+        return true;
+    }
+
+    void hardDrop() {
+        while (moveDown())
+            score += 2; // Bonus points
+    }
+
+    void mergeTetromino() {
+        for (int y = 0; y < TETROMINO_SIZE; y++) {
+            for (int x = 0; x < TETROMINO_SIZE; x++) {
+                if (currentTetromino[y][x] != 0) {
+                    int boardY = currentY + y;
+                    int boardX = currentX + x;
+                    if (boardY >= 0 && boardY < BOARD_HEIGHT && boardX >= 0 && boardX < BOARD_WIDTH)
+                        board[boardY][boardX] = currentTetromino[y][x];
+                }
+            }
+        }
+        
+        checkLines();
+        spawnTetromino();
+    }
+
+    void checkLines() {
+        int linesCompleted = 0;
+        
+        for (int y = BOARD_HEIGHT - 1; y >= 0; y--) {
+            bool lineComplete = true;
+            
+            for (int x = 0; x < BOARD_WIDTH; x++) {
+                if (board[y][x] == 0) {
+                    lineComplete = false;
+                    break;
+                }
+            }
+            
+            if (lineComplete) {
+                linesCompleted++;
+                
+                // Shift everything down
+                for (int moveY = y; moveY > 0; moveY--)
+                    for (int x = 0; x < BOARD_WIDTH; x++)
+                        board[moveY][x] = board[moveY - 1][x];
+                
+                // Clear top line
+                for (int x = 0; x < BOARD_WIDTH; x++)
+                    board[0][x] = 0;
+                
+                y++; // Check this line again
+            }
+        }
+        
+        if (linesCompleted > 0) {
+            score += 100 * level * linesCompleted * linesCompleted;
+            linesCleared += linesCompleted;
+            level = 1 + (linesCleared / SPEED_INCREASE_AFTER_LINES);
+            fallingSpeed = max(100, INITIAL_FALLING_SPEED - (level - 1) * SPEED_INCREASE_AMOUNT);
+        }
+    }
+
+    void drawTetromino(int type, const vector<vector<int>>& tetromino, int offsetX, int offsetY) {
+        for (int y = 0; y < TETROMINO_SIZE; y++)
+            for (int x = 0; x < TETROMINO_SIZE; x++)
+                if (tetromino[y][x] != 0)
+                    writeToBuffer(offsetX + x, offsetY + y, '@', TETROMINO_COLORS[type]);
+    }
+
+    void drawNextTetromino() {
+        writeStringToBuffer(PREVIEW_POS_X, PREVIEW_POS_Y - 1, "Next Piece:", WHITE);
+        
+        // Draw border
+        for (int y = 0; y < 6; y++)
+            for (int x = 0; x < 8; x++)
+                if (y == 0 || y == 5 || x == 0 || x == 7)
+                    writeToBuffer(PREVIEW_POS_X + x, PREVIEW_POS_Y + y, '#', WHITE);
+                else
+                    writeToBuffer(PREVIEW_POS_X + x, PREVIEW_POS_Y + y, ' ', WHITE);
+        
+        drawTetromino(nextTetrominoType + 1, nextTetromino, PREVIEW_POS_X + 2, PREVIEW_POS_Y + 1);
+    }
+
+    void drawBoard() {
+        // Top border
+        for (int x = 0; x <= BOARD_WIDTH + 1; x++)
+            writeToBuffer(x, 0, '#', WHITE);
+        
+        // Side borders and contents
+        for (int y = 0; y < BOARD_HEIGHT; y++) {
+            writeToBuffer(0, y + 1, '#', WHITE);
+            
+            for (int x = 0; x < BOARD_WIDTH; x++) {
+                int cellValue = board[y][x];
+                bool occupied = false;
+                
+                if (cellValue == 0) {
+                    // Check if current tetromino is here
+                    for (int ty = 0; ty < TETROMINO_SIZE && !occupied; ty++)
+                        for (int tx = 0; tx < TETROMINO_SIZE && !occupied; tx++)
+                            if (currentTetromino[ty][tx] != 0 && currentY + ty == y && currentX + tx == x) {
+                                occupied = true;
+                                cellValue = currentTetromino[ty][tx];
+                            }
+                    
+                    if (occupied)
+                        writeToBuffer(x + 1, y + 1, '@', TETROMINO_COLORS[cellValue]);
+                    else
+                        writeToBuffer(x + 1, y + 1, ' ', DARKGRAY);
+                } else {
+                    writeToBuffer(x + 1, y + 1, '@', TETROMINO_COLORS[cellValue]);
+                }
+            }
+            
+            writeToBuffer(BOARD_WIDTH + 1, y + 1, '#', WHITE);
+        }
+        
+        // Bottom border
+        for (int x = 0; x <= BOARD_WIDTH + 1; x++)
+            writeToBuffer(x, BOARD_HEIGHT + 1, '#', WHITE);
+    }
+
+    void drawInfo() {
+        writeStringToBuffer(INFO_POS_X, INFO_POS_Y, "Score: " + to_string(score), WHITE);
+        writeStringToBuffer(INFO_POS_X, INFO_POS_Y + 1, "High: " + to_string(highScore), WHITE);
+        writeStringToBuffer(INFO_POS_X, INFO_POS_Y + 2, "Level: " + to_string(level), WHITE);
+        writeStringToBuffer(INFO_POS_X, INFO_POS_Y + 3, "Lines: " + to_string(linesCleared), WHITE);
+        
+        writeStringToBuffer(INFO_POS_X, INFO_POS_Y + 5, "Controls:", WHITE);
+        writeStringToBuffer(INFO_POS_X, INFO_POS_Y + 6, "<-/->: Move", WHITE);
+        writeStringToBuffer(INFO_POS_X, INFO_POS_Y + 7, "^: Rotate", WHITE);
+        writeStringToBuffer(INFO_POS_X, INFO_POS_Y + 8, "v: Soft Drop", WHITE);
+        writeStringToBuffer(INFO_POS_X, INFO_POS_Y + 9, "Space: Hard Drop", WHITE);
+        writeStringToBuffer(INFO_POS_X, INFO_POS_Y + 10, "ESC: Pause", WHITE);
+    }
+
+    void drawGameOver() {
+        system("cls");
+        clearBuffer();
+        
+        setConsoleColor(LIGHTRED);
+        setConsoleColor(WHITE);
+        cout << "\n Final Score: " << score << endl;
+        cout << " High Score: " << highScore << endl;
+        
+        if (score == highScore && score > 0)
+            cout << "\n NEW HIGH SCORE! Congratulations!" << endl;
+        
+        cout << "\n\n What would you like to do?" << endl;
+        cout << " R - Restart" << endl;
+        cout << " Q - Quit" << endl;
+    }
+
+    void showWelcomeScreen() {
+        system("cls");
+        setConsoleColor(LIGHTCYAN);
+        setConsoleColor(WHITE);
+        
+        cout << "Welcome to Tetris!" << endl << endl;
+        cout << "Controls:" << endl;
+        cout << "- Arrow Keys: Move and rotate" << endl;
+        cout << "- Space: Hard drop" << endl;
+        cout << "- ESC: Pause game" << endl << endl;
+        
+        cout << "Press any key to start...";
+        _getch();
+    }
+
+    bool showPauseMenu() {
+        const int boxWidth = 20;
+        const int boxHeight = 7;
+        const int startX = (BOARD_WIDTH - boxWidth) / 2 + 1;
+        const int startY = BOARD_HEIGHT / 2 - boxHeight / 2;
+        
+        clearBuffer();
+        drawBoard();
+        
+        // Draw pause menu
+        for (int y = 0; y < boxHeight; y++)
+            for (int x = 0; x < boxWidth; x++)
+                if (y == 0 || y == boxHeight - 1 || x == 0 || x == boxWidth - 1)
+                    writeToBuffer(startX + x, startY + y, '#', WHITE);
+                else
+                    writeToBuffer(startX + x, startY + y, ' ', WHITE);
+        
+        writeStringToBuffer(startX + (boxWidth - 11) / 2, startY + 1, "  GAME PAUSED", YELLOW);
+        writeStringToBuffer(startX + 2, startY + 3, "  C - Continue", WHITE);
+        writeStringToBuffer(startX + 2, startY + 4, "  R - Restart", WHITE);
+        writeStringToBuffer(startX + 2, startY + 5, "  Q - Quit", WHITE);
+        
+        renderBuffer();
+        
+        bool continueGame = true;
+        bool validInput = false;
+        
+        while (!validInput) {
+            int key = _getch();
+            switch (tolower(key)) {
+                case 'c': validInput = true; break;
+                case 'r':
+                    validInput = true;
+                    continueGame = false;
+                    resetGame();
+                    break;
+                case 'q':
+                    validInput = true;
+                    continueGame = false;
+                    exitGame = true;
+                    break;
+            }
+        }
+        
+        return continueGame;
+    }
+
+    void handleGameOverInput() {
+        bool validInput = false;
+        
+        while (!validInput) {
+            int key = _getch();
+            switch (tolower(key)) {
+                case 'r':
+                    validInput = true;
+                    resetGame();
+                    system("cls");
+                    break;
+                case 'q':
+                    validInput = true;
+                    exitGame = true;
+                    break;
+            }
+        }
+    }
+
+    void handleInput() {
+        if (_kbhit()) {
+            int key = _getch();
+            
+            if (key == 224) { // Arrow keys
+                key = _getch();
+                switch (key) {
+                    case 72: rotateTetromino(); break;  // Up
+                    case 75: moveLeft(); break;         // Left
+                    case 77: moveRight(); break;        // Right
+                    case 80:                            // Down
+                        if (moveDown()) score += 1;     // Soft drop bonus
+                        break;
+                }
+            } else {
+                switch (key) {
+                    case 32: hardDrop(); break;         // Space
+                    case 27:                            // ESC
+                        if (!showPauseMenu()) return;
+                        break;
+                }
+            }
+        }
+    }
+
+    void update() {
+        static auto lastFallTime = chrono::steady_clock::now();
+        auto currentTime = chrono::steady_clock::now();
+        auto elapsed = chrono::duration_cast<chrono::milliseconds>(currentTime - lastFallTime).count();
+        
+        if (elapsed > fallingSpeed) {
+            moveDown();
+            lastFallTime = currentTime;
+        }
+    }
+
+    void draw() {
+        clearBuffer();
+        
+        if (gameOver) {
+            drawGameOver();
+        } else {
+            drawBoard();
+            drawNextTetromino();
+            drawInfo();
+            renderBuffer();
+        }
+    }
+
+    bool isGameOver() const { return gameOver; }
+    bool shouldExitGame() const { return exitGame; }
+};
+
+int main() {
+    system("cls");
+    system("title Tetris");
+    hideCursor();
+    
+    COORD bufferSize = {BOARD_WIDTH * 2 + 30, BOARD_HEIGHT + 2};
+    SetConsoleScreenBufferSize(GetStdHandle(STD_OUTPUT_HANDLE), bufferSize);
+    
+    TetrisGame game;
+    game.showWelcomeScreen();
+    
+    system("cls");
+    
+    while (!game.shouldExitGame()) {
+        if (game.isGameOver()) {
+            game.draw();
+            game.handleGameOverInput();
+        } else {
+            game.handleInput();
+            game.update();
+            game.draw();
+            Sleep(50); // Prevent too rapid updates
+        }
+    }
+    
+    system("cls");
+    setConsoleColor(LIGHTCYAN);
+    setConsoleColor(WHITE);
+    cout << "Thanks for playing Tetris!" << endl;
+    cout << "Press any key to exit...";
+    _getch();
+    
+    return 0;
+}
