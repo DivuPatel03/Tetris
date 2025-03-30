@@ -39,16 +39,14 @@ C - Continue game (when paused)
 3. Follow the on-screen instructions to play the game.
 
 ## Compilation Instructions
-Using Visual Studio:
+Using g++:
 ```sh
-# Open Visual Studio, create a new C++ Console Application
-# Copy the source code into the main .cpp file
-# Build with F7 or Ctrl+Shift+B
+g++ Tetris.cpp -o Tetris.exe
 ```
 
-Using MinGW:
+Run the executable:
 ```sh
-g++ -std=c++11 tetris.cpp -o tetris.exe -luser32
+./Tetris.exe
 ```
 
 ## Game Logic
