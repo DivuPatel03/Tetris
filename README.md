@@ -43,7 +43,7 @@ C - Continue game (when paused)
 ## Compilation Instructions
 Using g++:
 ```sh
-
+g++ Tetris.cpp -o Tetris.exe
 ```
 Run the executable:
 ```sh
