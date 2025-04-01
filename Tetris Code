@@ -17,19 +17,23 @@ const int TETROMINO_SIZE = 4;
 const int INITIAL_FALLING_SPEED = 500; // ms
 const int SPEED_INCREASE_AFTER_LINES = 10;
 const int SPEED_INCREASE_AMOUNT = 50; // ms
-const int PREVIEW_POS_X = BOARD_WIDTH + 4;
+const int PREVIEW_POS_X = BOARD_WIDTH * 2 + 5; // Adjusted for the border shift
 const int PREVIEW_POS_Y = 2;
-const int INFO_POS_X = BOARD_WIDTH + 4;
+const int INFO_POS_X = BOARD_WIDTH * 2 + 5; // Adjusted for the border shift
 const int INFO_POS_Y = 10;
+
+// Block characters
+const char BLOCK_CHAR = 219; // Full block character
+const char GHOST_CHAR = 176; // Light shade block for ghost piece
 
 // Game board and display buffer
 vector<vector<int>> board(BOARD_HEIGHT, vector<int>(BOARD_WIDTH, 0));
-CHAR_INFO consoleBuffer[BOARD_HEIGHT + 2][BOARD_WIDTH * 2 + 30];
+CHAR_INFO consoleBuffer[BOARD_HEIGHT + 2][BOARD_WIDTH * 2 + 31]; // +1 for shifted border
 
 // Tetromino shapes (I, O, T, S, Z, J, L)
 const vector<vector<vector<int>>> TETROMINOS = {
     {{0,0,0,0}, {1,1,1,1}, {0,0,0,0}, {0,0,0,0}}, // I
-    {{0,0,0,0}, {0,2,2,0}, {0,2,2,0}, {0,0,0,0}}, // O
+    {{0,0,0,0}, {0,2,2,0}, {0,2,2,0}, {0,0,0,0}}, // O 
     {{0,0,0,0}, {0,3,0,0}, {3,3,3,0}, {0,0,0,0}}, // T
     {{0,0,0,0}, {0,4,4,0}, {4,4,0,0}, {0,0,0,0}}, // S
     {{0,0,0,0}, {5,5,0,0}, {0,5,5,0}, {0,0,0,0}}, // Z
@@ -58,7 +62,7 @@ void hideCursor() {
 
 // Buffer manipulation functions
 void writeToBuffer(int x, int y, char ch, WORD attributes) {
-    if (y >= 0 && y < BOARD_HEIGHT + 2 && x >= 0 && x < BOARD_WIDTH * 2 + 30) {
+    if (y >= 0 && y < BOARD_HEIGHT + 2 && x >= 0 && x < BOARD_WIDTH * 2 + 31) { // Updated buffer size
         consoleBuffer[y][x].Char.AsciiChar = ch;
         consoleBuffer[y][x].Attributes = attributes;
     }
@@ -71,14 +75,14 @@ void writeStringToBuffer(int x, int y, const string& text, WORD attributes) {
 }
 
 void renderBuffer() {
-    COORD bufferSize = {BOARD_WIDTH * 2 + 30, BOARD_HEIGHT + 2};
-    SMALL_RECT writeRegion = {0, 0, BOARD_WIDTH * 2 + 29, BOARD_HEIGHT + 1};
+    COORD bufferSize = {BOARD_WIDTH * 2 + 31, BOARD_HEIGHT + 2}; // Updated buffer size
+    SMALL_RECT writeRegion = {0, 0, BOARD_WIDTH * 2 + 30, BOARD_HEIGHT + 1}; // Updated write region
     WriteConsoleOutput(GetStdHandle(STD_OUTPUT_HANDLE), (CHAR_INFO*)consoleBuffer, bufferSize, {0, 0}, &writeRegion);
 }
 
 void clearBuffer() {
     for (int y = 0; y < BOARD_HEIGHT + 2; y++)
-        for (int x = 0; x < BOARD_WIDTH * 2 + 30; x++) {
+        for (int x = 0; x < BOARD_WIDTH * 2 + 31; x++) { // Updated buffer size
             consoleBuffer[y][x].Char.AsciiChar = ' ';
             consoleBuffer[y][x].Attributes = WHITE;
         }
@@ -89,8 +93,10 @@ class TetrisGame {
 private:
     vector<vector<int>> currentTetromino, nextTetromino;
     int currentX, currentY, currentTetrominoType, nextTetrominoType;
+    int ghostY;  // Y position for ghost piece
     int score, highScore, level, linesCleared, fallingSpeed;
     bool gameOver, exitGame;
+    bool isFalling; // Flag to track if piece is still falling
     mt19937 gen;
 
 public:
@@ -110,9 +116,11 @@ public:
         linesCleared = 0;
         fallingSpeed = INITIAL_FALLING_SPEED;
         gameOver = false;
+        isFalling = true;
         
         generateNextTetromino();
         spawnTetromino();
+        updateGhostPiece();
     }
 
     void generateNextTetromino() {
@@ -127,6 +135,7 @@ public:
         
         currentX = BOARD_WIDTH / 2 - 2;
         currentY = 0;
+        isFalling = true;
         
         if (!isValidPosition()) {
             gameOver = true;
@@ -134,12 +143,16 @@ public:
         }
     }
 
-    bool isValidPosition() {
+    bool isValidPosition(int testX = -1, int testY = -1, const vector<vector<int>>* tetromino = nullptr) {
+        if (testX == -1) testX = currentX;
+        if (testY == -1) testY = currentY;
+        if (tetromino == nullptr) tetromino = &currentTetromino;
+        
         for (int y = 0; y < TETROMINO_SIZE; y++) {
             for (int x = 0; x < TETROMINO_SIZE; x++) {
-                if (currentTetromino[y][x] != 0) {
-                    int boardX = currentX + x;
-                    int boardY = currentY + y;
+                if ((*tetromino)[y][x] != 0) {
+                    int boardX = testX + x;
+                    int boardY = testY + y;
                     
                     if (boardX < 0 || boardX >= BOARD_WIDTH || 
                         boardY < 0 || boardY >= BOARD_HEIGHT || 
@@ -152,7 +165,21 @@ public:
         return true;
     }
 
+    void updateGhostPiece() {
+        ghostY = currentY;
+        
+        // Find the lowest valid position
+        while (isValidPosition(currentX, ghostY + 1)) {
+            ghostY++;
+        }
+    }
+
     void rotateTetromino() {
+        // Special case for O tetromino: don't rotate the separate squares
+        if (currentTetrominoType == 1) { // O tetromino
+            return;
+        }
+        
         vector<vector<int>> originalTetromino = currentTetromino;
         vector<vector<int>> rotatedTetromino(TETROMINO_SIZE, vector<int>(TETROMINO_SIZE, 0));
         
@@ -178,18 +205,24 @@ public:
                 }
             }
         }
+        
+        updateGhostPiece();
     }
 
     void moveLeft() {
         currentX--;
         if (!isValidPosition())
             currentX++;
+        else
+            updateGhostPiece();
     }
 
     void moveRight() {
         currentX++;
         if (!isValidPosition())
             currentX--;
+        else
+            updateGhostPiece();
     }
 
     bool moveDown() {
@@ -197,8 +230,10 @@ public:
         if (!isValidPosition()) {
             currentY--;
             mergeTetromino();
+            isFalling = false;
             return false;
         }
+        updateGhostPiece();
         return true;
     }
 
@@ -221,6 +256,7 @@ public:
         
         checkLines();
         spawnTetromino();
+        updateGhostPiece();
     }
 
     void checkLines() {
@@ -260,64 +296,121 @@ public:
         }
     }
 
-    void drawTetromino(int type, const vector<vector<int>>& tetromino, int offsetX, int offsetY) {
-        for (int y = 0; y < TETROMINO_SIZE; y++)
-            for (int x = 0; x < TETROMINO_SIZE; x++)
-                if (tetromino[y][x] != 0)
-                    writeToBuffer(offsetX + x, offsetY + y, '@', TETROMINO_COLORS[type]);
+    void drawTetromino(int type, const vector<vector<int>>& tetromino, int offsetX, int offsetY, bool isGhost = false) {
+        for (int y = 0; y < TETROMINO_SIZE; y++) {
+            for (int x = 0; x < TETROMINO_SIZE; x++) {
+                if (tetromino[y][x] != 0) {
+                    char blockChar = isGhost ? GHOST_CHAR : BLOCK_CHAR;
+                    
+                    // Add a border for square blocks if it's type 1 (the O tetromino)
+                    if (type == 2) { // O tetromino (type+1 because we use 0 for empty cells)
+                        // Each block takes 2 characters width
+                        writeToBuffer((offsetX + x) * 2, offsetY + y, blockChar, TETROMINO_COLORS[type]);
+                        writeToBuffer((offsetX + x) * 2 + 1, offsetY + y, blockChar, TETROMINO_COLORS[type]);
+                    } else {
+                        // Standard drawing for non-square blocks
+                        writeToBuffer((offsetX + x) * 2, offsetY + y, blockChar, TETROMINO_COLORS[type]);
+                        writeToBuffer((offsetX + x) * 2 + 1, offsetY + y, blockChar, TETROMINO_COLORS[type]);
+                    }
+                }
+            }
+        }
     }
 
     void drawNextTetromino() {
         writeStringToBuffer(PREVIEW_POS_X, PREVIEW_POS_Y - 1, "Next Piece:", WHITE);
         
         // Draw border
-        for (int y = 0; y < 6; y++)
-            for (int x = 0; x < 8; x++)
-                if (y == 0 || y == 5 || x == 0 || x == 7)
-                    writeToBuffer(PREVIEW_POS_X + x, PREVIEW_POS_Y + y, '#', WHITE);
-                else
-                    writeToBuffer(PREVIEW_POS_X + x, PREVIEW_POS_Y + y, ' ', WHITE);
+        writeToBuffer(PREVIEW_POS_X, PREVIEW_POS_Y, '+', WHITE);
+        for (int x = 1; x < 9; x++)
+            writeToBuffer(PREVIEW_POS_X + x, PREVIEW_POS_Y, '-', WHITE);
+        writeToBuffer(PREVIEW_POS_X + 9, PREVIEW_POS_Y, '+', WHITE);
         
-        drawTetromino(nextTetrominoType + 1, nextTetromino, PREVIEW_POS_X + 2, PREVIEW_POS_Y + 1);
+        for (int y = 1; y < 6; y++) {
+            writeToBuffer(PREVIEW_POS_X, PREVIEW_POS_Y + y, '|', WHITE);
+            writeToBuffer(PREVIEW_POS_X + 9, PREVIEW_POS_Y + y, '|', WHITE);
+        }
+        
+        writeToBuffer(PREVIEW_POS_X, PREVIEW_POS_Y + 6, '+', WHITE);
+        for (int x = 1; x < 9; x++)
+            writeToBuffer(PREVIEW_POS_X + x, PREVIEW_POS_Y + 6, '-', WHITE);
+        writeToBuffer(PREVIEW_POS_X + 9, PREVIEW_POS_Y + 6, '+', WHITE);
+        
+        // Since we draw with 2 chars per block, adjust the x offset for the preview
+        drawTetromino(nextTetrominoType + 1, nextTetromino, (PREVIEW_POS_X + 1) / 2, PREVIEW_POS_Y + 1);
     }
 
     void drawBoard() {
-        // Top border
-        for (int x = 0; x <= BOARD_WIDTH + 1; x++)
-            writeToBuffer(x, 0, '#', WHITE);
+        // Top border with +---+ style
+        writeToBuffer(0, 0, '+', WHITE);
+        for (int x = 1; x < BOARD_WIDTH * 2 + 1; x++) // +1 for the border shift
+            writeToBuffer(x, 0, '-', WHITE);
+        writeToBuffer(BOARD_WIDTH * 2 + 1, 0, '+', WHITE); // Shifted right border
         
         // Side borders and contents
         for (int y = 0; y < BOARD_HEIGHT; y++) {
-            writeToBuffer(0, y + 1, '#', WHITE);
+            writeToBuffer(0, y + 1, '|', WHITE);
             
             for (int x = 0; x < BOARD_WIDTH; x++) {
                 int cellValue = board[y][x];
                 bool occupied = false;
+                bool isGhostPiece = false;
                 
+                // Check if ghost piece is here
                 if (cellValue == 0) {
-                    // Check if current tetromino is here
-                    for (int ty = 0; ty < TETROMINO_SIZE && !occupied; ty++)
-                        for (int tx = 0; tx < TETROMINO_SIZE && !occupied; tx++)
+                    for (int ty = 0; ty < TETROMINO_SIZE && !occupied; ty++) {
+                        for (int tx = 0; tx < TETROMINO_SIZE && !occupied; tx++) {
+                            if (currentTetromino[ty][tx] != 0 && ghostY + ty == y && currentX + tx == x) {
+                                if (ghostY != currentY) { // Only show ghost if it's not at the same position as current
+                                    isGhostPiece = true;
+                                    cellValue = currentTetromino[ty][tx];
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                // Check if current tetromino is here
+                if (cellValue == 0 || isGhostPiece) {
+                    for (int ty = 0; ty < TETROMINO_SIZE && !occupied; ty++) {
+                        for (int tx = 0; tx < TETROMINO_SIZE && !occupied; tx++) {
                             if (currentTetromino[ty][tx] != 0 && currentY + ty == y && currentX + tx == x) {
                                 occupied = true;
+                                isGhostPiece = false; // Current piece takes precedence over ghost
                                 cellValue = currentTetromino[ty][tx];
                             }
+                        }
+                    }
+                }
+                
+                if (occupied || isGhostPiece || cellValue != 0) {
+                    char blockChar = isGhostPiece ? GHOST_CHAR : BLOCK_CHAR;
                     
-                    if (occupied)
-                        writeToBuffer(x + 1, y + 1, '@', TETROMINO_COLORS[cellValue]);
-                    else
-                        writeToBuffer(x + 1, y + 1, ' ', DARKGRAY);
+                    // Special drawing for O tetromino (square blocks)
+                    if (cellValue == 2) {
+                        // Draw with border effect
+                        ConsoleColor blockColor = TETROMINO_COLORS[cellValue];
+                        writeToBuffer(x * 2 + 1, y + 1, blockChar, blockColor);
+                        writeToBuffer(x * 2 + 2, y + 1, blockChar, blockColor);
+                    } else {
+                        // Normal blocks
+                        writeToBuffer(x * 2 + 1, y + 1, blockChar, TETROMINO_COLORS[cellValue]);
+                        writeToBuffer(x * 2 + 2, y + 1, blockChar, TETROMINO_COLORS[cellValue]);
+                    }
                 } else {
-                    writeToBuffer(x + 1, y + 1, '@', TETROMINO_COLORS[cellValue]);
+                    writeToBuffer(x * 2 + 1, y + 1, ' ', DARKGRAY);
+                    writeToBuffer(x * 2 + 2, y + 1, ' ', DARKGRAY);
                 }
             }
             
-            writeToBuffer(BOARD_WIDTH + 1, y + 1, '#', WHITE);
+            writeToBuffer(BOARD_WIDTH * 2 + 1, y + 1, '|', WHITE); // Shifted right border
         }
         
         // Bottom border
-        for (int x = 0; x <= BOARD_WIDTH + 1; x++)
-            writeToBuffer(x, BOARD_HEIGHT + 1, '#', WHITE);
+        writeToBuffer(0, BOARD_HEIGHT + 1, '+', WHITE);
+        for (int x = 1; x < BOARD_WIDTH * 2 + 1; x++) // +1 for the border shift
+            writeToBuffer(x, BOARD_HEIGHT + 1, '-', WHITE);
+        writeToBuffer(BOARD_WIDTH * 2 + 1, BOARD_HEIGHT + 1, '+', WHITE); // Shifted right border
     }
 
     void drawInfo() {
@@ -342,6 +435,8 @@ public:
         setConsoleColor(WHITE);
         cout << "\n Final Score: " << score << endl;
         cout << " High Score: " << highScore << endl;
+        cout << " Lines Cleared: " << linesCleared << endl;
+        cout << " Level Reached: " << level << endl;
         
         if (score == highScore && score > 0)
             cout << "\n NEW HIGH SCORE! Congratulations!" << endl;
@@ -369,19 +464,29 @@ public:
     bool showPauseMenu() {
         const int boxWidth = 20;
         const int boxHeight = 7;
-        const int startX = (BOARD_WIDTH - boxWidth) / 2 + 1;
+        const int startX = (BOARD_WIDTH * 2 - boxWidth) / 2;
         const int startY = BOARD_HEIGHT / 2 - boxHeight / 2;
         
         clearBuffer();
         drawBoard();
         
-        // Draw pause menu
-        for (int y = 0; y < boxHeight; y++)
-            for (int x = 0; x < boxWidth; x++)
-                if (y == 0 || y == boxHeight - 1 || x == 0 || x == boxWidth - 1)
-                    writeToBuffer(startX + x, startY + y, '#', WHITE);
-                else
-                    writeToBuffer(startX + x, startY + y, ' ', WHITE);
+        // Draw pause menu with improved borders
+        writeToBuffer(startX, startY, '+', WHITE);
+        for (int x = 1; x < boxWidth - 1; x++)
+            writeToBuffer(startX + x, startY, '-', WHITE);
+        writeToBuffer(startX + boxWidth - 1, startY, '+', WHITE);
+        
+        for (int y = 1; y < boxHeight - 1; y++) {
+            writeToBuffer(startX, startY + y, '|', WHITE);
+            for (int x = 1; x < boxWidth - 1; x++)
+                writeToBuffer(startX + x, startY + y, ' ', WHITE);
+            writeToBuffer(startX + boxWidth - 1, startY + y, '|', WHITE);
+        }
+        
+        writeToBuffer(startX, startY + boxHeight - 1, '+', WHITE);
+        for (int x = 1; x < boxWidth - 1; x++)
+            writeToBuffer(startX + x, startY + boxHeight - 1, '-', WHITE);
+        writeToBuffer(startX + boxWidth - 1, startY + boxHeight - 1, '+', WHITE);
         
         writeStringToBuffer(startX + (boxWidth - 11) / 2, startY + 1, "  GAME PAUSED", YELLOW);
         writeStringToBuffer(startX + 2, startY + 3, "  C - Continue", WHITE);
@@ -490,7 +595,8 @@ int main() {
     system("title Tetris");
     hideCursor();
     
-    COORD bufferSize = {BOARD_WIDTH * 2 + 30, BOARD_HEIGHT + 2};
+    // Adjust buffer size because we're using 2 characters per cell now
+    COORD bufferSize = {BOARD_WIDTH * 2 + 31, BOARD_HEIGHT + 2}; // Updated buffer size
     SetConsoleScreenBufferSize(GetStdHandle(STD_OUTPUT_HANDLE), bufferSize);
     
     TetrisGame game;
@@ -512,10 +618,14 @@ int main() {
     
     system("cls");
     setConsoleColor(LIGHTCYAN);
-    setConsoleColor(WHITE);
-    cout << "Thanks for playing Tetris!" << endl;
-    cout << "Press any key to exit...";
+    
+    // Display goodbye message
+    cout << "\n Thanks for playing Tetris!" << endl;
+    cout << " Hope you enjoyed the game!" << endl << endl;
+    cout << " Press any key to exit...";
     _getch();
     
+    // Reset console color before exiting
+    setConsoleColor(WHITE);
     return 0;
 }
